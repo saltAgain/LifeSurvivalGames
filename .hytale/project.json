@@ -1,0 +1,10 @@
+{
+  "groupId": "gg.emberfall",
+  "artifactId": "template",
+  "modName": "Template",
+  "version": "1.0.0",
+  "buildSystem": "Gradle",
+  "language": "Java",
+  "jarPath": "build/libs/template-1.0.0.jar",
+  "buildTask": "shadowJar"
+}

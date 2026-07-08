@@ -1,0 +1,14 @@
+{
+    "Group": "Saltt",
+    "Name": "template",
+    "Version": "1.0.0",
+    "Description": "A Hytale server mod",
+    "Authors": [
+        {
+            "Name": "saltt"
+        }
+    ],
+    "DisabledByDefault": false,
+    "IncludesAssetPack": false,
+    "Main": "gg.emberfall.template.Main"
+}
