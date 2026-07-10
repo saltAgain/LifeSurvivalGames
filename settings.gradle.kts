@@ -1,4 +1,4 @@
-rootProject.name = "template"
+rootProject.name = "LifeSurvivalGames"
 
 plugins {
     // See documentation on https://scaffoldit.dev
@@ -24,7 +24,7 @@ hytale {
 
     manifest {
         Group = "Saltt"
-        Name = "template"
-        Main = "gg.emberfall.template.Main"
+        Name = "survivalgame"
+        Main = "dev.saltt.survivalgame.Main"
     }
 }
