@@ -2,7 +2,9 @@ package dev.saltt.survivalgame.lifecycle.server;
 
 import com.hypixel.hytale.logger.HytaleLogger;
 import com.hypixel.hytale.server.core.HytaleServer;
+import com.hypixel.hytale.server.core.Message;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
+import com.hypixel.hytale.server.core.universe.Universe;
 import dev.saltt.common.api.GameStatus;
 import dev.saltt.common.api.LifeGameType;
 import dev.saltt.common.api.propaties.PlayerManagementProperties;
@@ -48,6 +50,17 @@ public final class ServerState {
     private final Set<UUID> authedPlayers = ConcurrentHashMap.newKeySet();
     private final Set<UUID> onlinePlayers = ConcurrentHashMap.newKeySet();
 
+    // phase 1: resettable wait for more players
+    private final int countdownSeconds = 10;
+    private final int maxCountdownResets = 2;
+    private int countdownResets = 0;
+    private long countdownStartedAtSeconds = 0;
+    private ScheduledFuture<?> countdownTask;
+
+    // phase 2: locked-in start countdown broadcast to chat
+    private int startCountdownSeconds;
+    private ScheduledFuture<?> startGameTask;
+
     public ServerState(UUID matchId, short maxPlayers, short minStartingPlayers,
                        String fallbackServerIp, short fallbackServerPort,
                        String lifecycleHost, int lifecyclePort, long heartbeatIntervalSeconds) {
@@ -75,7 +88,7 @@ public final class ServerState {
 
     public void authPlayer(UUID uuid) {
         authedPlayers.add(uuid);
-        //remove player if they dont join after timeout
+        //drop the reservation if they never actually connect
         HytaleServer.SCHEDULED_EXECUTOR.schedule(
                 () -> {
                     if (!onlinePlayers.contains(uuid)) {
@@ -88,15 +101,15 @@ public final class ServerState {
     }
 
     public void playerJoin(PlayerRef playerRef) {
-        if(!authedPlayers.contains(playerRef.getUuid())) {
-            //not authed
+        if (!authedPlayers.contains(playerRef.getUuid())) {
             playerRef.referToServer(fallbackServerIp, fallbackServerPort);
+            return;
         }
 
         onlinePlayers.add(playerRef.getUuid());
 
-        if(onlinePlayers.size() >= minStartingPlayers) {
-            //
+        if (gameStatus == GameStatus.PRE_GAME) {
+            updateCountdown();
         }
 
         heartbeat();
@@ -104,12 +117,110 @@ public final class ServerState {
 
     public void playerLeave(PlayerRef playerRef) {
         onlinePlayers.remove(playerRef.getUuid());
-        if(onlinePlayers.size() == 0) {
+
+        //cancel the wait if we drop back under the minimum
+        if (gameStatus == GameStatus.PRE_GAME && countdownTask != null
+                && onlinePlayers.size() < minStartingPlayers) {
+            stopCountdown();
+        }
+
+        if (onlinePlayers.isEmpty()) {
             //TODO: shutdown maybe?
+        }
+
+        heartbeat();
+    }
+
+    // ---- phase 1: waiting-for-players countdown ----
+
+    private void updateCountdown() {
+        if (onlinePlayers.size() >= maxPlayers) {
+            beginStarting();
+        } else if (countdownTask == null) {
+            if (onlinePlayers.size() >= minStartingPlayers) {
+                startCountdown();
+            }
+        } else if (shouldCountdownRestart()) {
+            startCountdown();
         }
     }
 
-    // heartbeat
+    private void startCountdown() {
+        stopCountdown();
+        countdownStartedAtSeconds = nowSeconds();
+        countdownTask = HytaleServer.SCHEDULED_EXECUTOR.schedule(
+                this::beginStarting, countdownSeconds, TimeUnit.SECONDS);
+        broadcast("Game starting in " + countdownSeconds + " seconds...");
+    }
+
+    private void stopCountdown() {
+        if (countdownTask != null) {
+            countdownTask.cancel(false);
+            countdownTask = null;
+        }
+    }
+
+    private boolean shouldCountdownRestart() {
+        if (countdownResets >= maxCountdownResets) {
+            return false;
+        }
+        //only extend once we're past the halfway point, otherwise there's already plenty of time
+        if (nowSeconds() - countdownStartedAtSeconds <= countdownSeconds / 2) {
+            return false;
+        }
+        countdownResets++;
+        return true;
+    }
+
+    // ---- phase 2: locked-in start countdown ----
+
+    private void beginStarting() {
+        if (gameStatus != GameStatus.PRE_GAME) {
+            return;
+        }
+        stopCountdown();
+
+        //lock the roster and let the matchmaker bind players to this started lobby
+        authedPlayers.clear();
+        authedPlayers.addAll(onlinePlayers);
+        gameStatus = GameStatus.STARTING;
+        heartbeat();
+
+        startCountdownSeconds = 10;
+        startGameTask = HytaleServer.SCHEDULED_EXECUTOR.scheduleAtFixedRate(
+                this::tickStartCountdown, 0, 1, TimeUnit.SECONDS);
+    }
+
+    private void tickStartCountdown() {
+        if (startCountdownSeconds > 0) {
+            broadcast("Game starting in " + startCountdownSeconds + "...");
+            startCountdownSeconds--;
+            return;
+        }
+        stopStartCountdown();
+        startGame();
+    }
+
+    private void stopStartCountdown() {
+        if (startGameTask != null) {
+            startGameTask.cancel(false);
+            startGameTask = null;
+        }
+    }
+
+    private void startGame() {
+        //TODO: tp to spawn points, begin gameplay
+    }
+
+    private void broadcast(String text) {
+        Universe.get().sendMessage(Message.raw(text));
+    }
+
+    private static long nowSeconds() {
+        return System.currentTimeMillis() / 1000L;
+    }
+
+    // ---- heartbeat ----
 
     private void startHeartbeat() {
         this.channel = ManagedChannelBuilder.forAddress(lifecycleHost, lifecyclePort)
@@ -175,6 +286,9 @@ public final class ServerState {
     }
 
     public void shutdown() {
+        stopCountdown();
+        stopStartCountdown();
+
         if (heartbeatTask != null) {
             heartbeatTask.cancel(false);
             heartbeatTask = null;
