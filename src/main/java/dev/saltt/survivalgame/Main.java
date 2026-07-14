@@ -4,6 +4,8 @@ import com.hypixel.hytale.server.core.plugin.JavaPlugin;
 import com.hypixel.hytale.server.core.plugin.JavaPluginInit;
 import com.hypixel.hytale.server.core.util.Config;
 import dev.saltt.survivalgame.loot.*;
+import dev.saltt.survivalgame.loot.storage.ChestLootConfig;
+import dev.saltt.survivalgame.loot.storage.LootTablesConfig;
 import org.checkerframework.checker.nullness.qual.NonNull;
 
 import javax.annotation.Nonnull;

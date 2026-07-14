@@ -1,5 +1,12 @@
 package dev.saltt.survivalgame.loot;
 
+import dev.saltt.survivalgame.loot.models.ChestLoot;
+import dev.saltt.survivalgame.loot.models.LootEntry;
+import dev.saltt.survivalgame.loot.models.LootStack;
+import dev.saltt.survivalgame.loot.models.LootTable;
+import dev.saltt.survivalgame.loot.storage.ChestLootConfig;
+import dev.saltt.survivalgame.loot.storage.LootTablesConfig;
+
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.util.ArrayList;

@@ -1,307 +1,149 @@
 package dev.saltt.survivalgame.lifecycle.server;
 
+import dev.saltt.survivalgame.GameConfig;
+import dev.saltt.survivalgame.lifecycle.HytaleWorldHooks;
+import dev.saltt.survivalgame.lifecycle.data.HeartbeatMessage;
+import dev.saltt.survivalgame.lifecycle.data.MatchFlusher;
+import dev.saltt.survivalgame.lifecycle.data.ProtoMapper;
+import dev.saltt.survivalgame.lifecycle.data.grpc.ReserveService;
+import dev.saltt.survivalgame.lifecycle.game.MainThreadWorldHook;
+import dev.saltt.survivalgame.lifecycle.game.SurvivalGame;
 import com.hypixel.hytale.logger.HytaleLogger;
 import com.hypixel.hytale.server.core.HytaleServer;
-import com.hypixel.hytale.server.core.Message;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
-import com.hypixel.hytale.server.core.universe.Universe;
 import dev.saltt.common.api.GameStatus;
 import dev.saltt.common.api.LifeGameType;
-import dev.saltt.common.api.propaties.PlayerManagementProperties;
-import dev.saltt.common.api.proto.HeartbeatAck;
-import dev.saltt.common.api.proto.HeartbeatServiceGrpc;
-import dev.saltt.common.api.proto.SubHeartbeatMessage;
-import io.grpc.ManagedChannel;
-import io.grpc.ManagedChannelBuilder;
-import io.grpc.stub.StreamObserver;
+import dev.saltt.common.api.proto.RegisterServerMessage;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 
+/**
+ * Wiring only. Behaviour lives in GamePhaseController, LifecycleClient, PlayerRegistry,
+ * ReserveService and SurvivalGame.
+ */
 public final class ServerState {
 
     private static final HytaleLogger LOGGER = HytaleLogger.forEnclosingClass();
+    private static final LifeGameType GAME_TYPE = LifeGameType.SURVIVAL_GAMES;
 
     private final UUID matchId;
-    private final short maxPlayers;
-    private final short minStartingPlayers;
-    private final LifeGameType gameType = LifeGameType.SURVIVAL_GAMES;
-    private final String fallbackServerIp;
-    private final short fallbackServerPort;
+    private final GameConfig config;
 
-    // lifecycle service (heartbeat target)
-    private final String lifecycleHost;
-    private final int lifecyclePort;
-    private final long heartbeatIntervalSeconds;
+    private final PlayerRegistry registry;
+    private final SurvivalGame game;
+    private final HeartbeatMessage messages;
+    private final LifecycleClient lifecycle;
+    private final MatchFlusher flusher;
+    private final GamePhaseController phases;
+    private final ReserveService reserveService;
 
-    private ManagedChannel channel;
-    private HeartbeatServiceGrpc.HeartbeatServiceStub heartbeatStub;
-    private ScheduledFuture<?> heartbeatTask;
+    private final AtomicBoolean tornDown = new AtomicBoolean(false);
 
-    private GameStatus gameStatus = GameStatus.SERVER_LOADING;
-
-    // concurrent: mutated on the event thread, read on the scheduler thread
-    private final Set<UUID> authedPlayers = ConcurrentHashMap.newKeySet();
-    private final Set<UUID> onlinePlayers = ConcurrentHashMap.newKeySet();
-
-    // phase 1: resettable wait for more players
-    private final int countdownSeconds = 10;
-    private final int maxCountdownResets = 2;
-    private int countdownResets = 0;
-    private long countdownStartedAtSeconds = 0;
-    private ScheduledFuture<?> countdownTask;
-
-    // phase 2: locked-in start countdown broadcast to chat
-    private int startCountdownSeconds;
-    private ScheduledFuture<?> startGameTask;
-
-    public ServerState(UUID matchId, short maxPlayers, short minStartingPlayers,
-                       String fallbackServerIp, short fallbackServerPort,
-                       String lifecycleHost, int lifecyclePort, long heartbeatIntervalSeconds) {
+    public ServerState(UUID matchId, GameConfig config) {
         this.matchId = matchId;
-        this.maxPlayers = maxPlayers;
-        this.minStartingPlayers = minStartingPlayers;
-        this.fallbackServerIp = fallbackServerIp;
-        this.fallbackServerPort = fallbackServerPort;
-        this.lifecycleHost = lifecycleHost;
-        this.lifecyclePort = lifecyclePort;
-        this.heartbeatIntervalSeconds = heartbeatIntervalSeconds;
+        this.config = config;
+
+        // TODO: point this at the real tick executor if HytaleServer exposes one. Universe
+        // messages and PlayerRef#referToServer are almost certainly tick-thread-only, and the
+        // original code called them from an arbitrary pool thread. One line to change.
+        Executor mainThread = HytaleServer.SCHEDULED_EXECUTOR::execute;
+
+        this.registry = new PlayerRegistry();
+        this.game = new SurvivalGame(config, new MainThreadWorldHook(new HytaleWorldHooks(), mainThread));
+        this.messages = new HeartbeatMessage(matchId, GAME_TYPE, registry);
+        this.lifecycle = new LifecycleClient(config, () -> messages.build(getStatus()));
+        this.flusher = new MatchFlusher(matchId, game, lifecycle);
+        this.phases = new GamePhaseController(config, registry, game, lifecycle, flusher, mainThread);
+        this.reserveService = new ReserveService(matchId, GAME_TYPE, config, phases);
+
+        this.phases.setTeardownHook(this::teardown);
     }
 
     public boolean setup() {
+        try {
+            config.validate();
+        } catch (IllegalStateException e) {
+            LOGGER.at(Level.SEVERE).log("[Lifecycle] Invalid config: %s", e.getMessage());
+            return false;
+        }
 
-        //register server message
+        // without this, an uncaught throwable means no status and no heartbeat, and the
+        // matchmaker holds our players until the liveness timeout expires
+        Thread.setDefaultUncaughtExceptionHandler((thread, throwable) -> {
+            LOGGER.at(Level.SEVERE).log("[Lifecycle] Uncaught on %s: %s", thread.getName(), throwable);
+            phases.crash(throwable);
+        });
 
+        lifecycle.connect();
+        lifecycle.startHeartbeat();
+
+        try {
+            reserveService.start();
+        } catch (Exception e) {
+            LOGGER.at(Level.SEVERE).log("[Lifecycle] Could not bind reserve service: %s", e.getMessage());
+            return false;
+        }
         return true;
     }
 
+    /** World is loaded: register with the lifecycle service, then open the lobby. */
     public void serverReady() {
-        gameStatus = GameStatus.PRE_GAME;
-        startHeartbeat();
-    }
-
-    public void authPlayer(UUID uuid) {
-        authedPlayers.add(uuid);
-        //drop the reservation if they never actually connect
-        HytaleServer.SCHEDULED_EXECUTOR.schedule(
-                () -> {
-                    if (!onlinePlayers.contains(uuid)) {
-                        authedPlayers.remove(uuid);
-                    }
-                },
-                PlayerManagementProperties.PLAYER_CONNECT_TIMEOUT_MS,
-                TimeUnit.MILLISECONDS
-        );
+        lifecycle.registerServer(
+                RegisterServerMessage.newBuilder()
+                        .setMatchId(matchId.toString())
+                        .setGameType(ProtoMapper.toProto(GAME_TYPE))
+                        .setMapName(config.getMapName())
+                        .setRegion(ProtoMapper.toProto(config.getRegion()))
+                        .setMaxPlayers(config.getMaxPlayers())
+                        .setMinimumStartingPlayers(config.getMinStartingPlayers())
+                        .build(),
+                phases::serverReady,
+                () -> phases.crash(new IllegalStateException("registration exhausted retries")));
     }
 
     public void playerJoin(PlayerRef playerRef) {
-        if (!authedPlayers.contains(playerRef.getUuid())) {
-            playerRef.referToServer(fallbackServerIp, fallbackServerPort);
-            return;
-        }
-
-        onlinePlayers.add(playerRef.getUuid());
-
-        if (gameStatus == GameStatus.PRE_GAME) {
-            updateCountdown();
-        }
-
-        heartbeat();
+        phases.onJoin(playerRef);
     }
 
     public void playerLeave(PlayerRef playerRef) {
-        onlinePlayers.remove(playerRef.getUuid());
-
-        //cancel the wait if we drop back under the minimum
-        if (gameStatus == GameStatus.PRE_GAME && countdownTask != null
-                && onlinePlayers.size() < minStartingPlayers) {
-            stopCountdown();
-        }
-
-        if (onlinePlayers.isEmpty()) {
-            //TODO: shutdown maybe?
-        }
-
-        heartbeat();
+        phases.onLeave(playerRef);
     }
 
-    // ---- phase 1: waiting-for-players countdown ----
-
-    private void updateCountdown() {
-        if (onlinePlayers.size() >= maxPlayers) {
-            beginStarting();
-        } else if (countdownTask == null) {
-            if (onlinePlayers.size() >= minStartingPlayers) {
-                startCountdown();
-            }
-        } else if (shouldCountdownRestart()) {
-            startCountdown();
-        }
+    public void playerDeath(UUID uuid, String causeOfDeath, UUID killerUuid) {
+        phases.onPlayerDeath(uuid, causeOfDeath, killerUuid);
     }
 
-    private void startCountdown() {
-        stopCountdown();
-        countdownStartedAtSeconds = nowSeconds();
-        countdownTask = HytaleServer.SCHEDULED_EXECUTOR.schedule(
-                this::beginStarting, countdownSeconds, TimeUnit.SECONDS);
-        broadcast("Game starting in " + countdownSeconds + " seconds...");
+    public void playerDamaged(UUID attacker, UUID victim, long amount) {
+        phases.onDamage(attacker, victim, amount);
     }
 
-    private void stopCountdown() {
-        if (countdownTask != null) {
-            countdownTask.cancel(false);
-            countdownTask = null;
-        }
+    public void playerAssisted(UUID uuid) {
+        phases.onAssist(uuid);
     }
 
-    private boolean shouldCountdownRestart() {
-        if (countdownResets >= maxCountdownResets) {
-            return false;
-        }
-        //only extend once we're past the halfway point, otherwise there's already plenty of time
-        if (nowSeconds() - countdownStartedAtSeconds <= countdownSeconds / 2) {
-            return false;
-        }
-        countdownResets++;
-        return true;
+    public GameStatus getStatus() {
+        return phases.getStatus();
     }
 
-    // ---- phase 2: locked-in start countdown ----
-
-    private void beginStarting() {
-        if (gameStatus != GameStatus.PRE_GAME) {
+    /**
+     * Runs on its own thread: the terminal heartbeat and both channel shutdowns block, and this
+     * is reachable from the world thread (plugin disable, or crash via the uncaught handler).
+     */
+    public void teardown() {
+        if (!tornDown.compareAndSet(false, true)) {
             return;
         }
-        stopCountdown();
-
-        //lock the roster and let the matchmaker bind players to this started lobby
-        authedPlayers.clear();
-        authedPlayers.addAll(onlinePlayers);
-        gameStatus = GameStatus.STARTING;
-        heartbeat();
-
-        startCountdownSeconds = 10;
-        startGameTask = HytaleServer.SCHEDULED_EXECUTOR.scheduleAtFixedRate(
-                this::tickStartCountdown, 0, 1, TimeUnit.SECONDS);
-    }
-
-    private void tickStartCountdown() {
-        if (startCountdownSeconds > 0) {
-            broadcast("Game starting in " + startCountdownSeconds + "...");
-            startCountdownSeconds--;
-            return;
-        }
-        stopStartCountdown();
-        startGame();
-    }
-
-    private void stopStartCountdown() {
-        if (startGameTask != null) {
-            startGameTask.cancel(false);
-            startGameTask = null;
-        }
-    }
-
-    private void startGame() {
-        //TODO: tp to spawn points, begin gameplay
-    }
-
-    private void broadcast(String text) {
-        Universe.get().sendMessage(Message.raw(text));
-    }
-
-    private static long nowSeconds() {
-        return System.currentTimeMillis() / 1000L;
-    }
-
-    // ---- heartbeat ----
-
-    private void startHeartbeat() {
-        this.channel = ManagedChannelBuilder.forAddress(lifecycleHost, lifecyclePort)
-                .usePlaintext()
-                .build();
-        this.heartbeatStub = HeartbeatServiceGrpc.newStub(channel);
-
-        heartbeatTask = HytaleServer.SCHEDULED_EXECUTOR.scheduleAtFixedRate(
-                this::heartbeat,
-                1,                          // initial delay
-                heartbeatIntervalSeconds,   // period
-                TimeUnit.SECONDS
-        );
-
-        LOGGER.at(Level.INFO).log("[Heartbeat] Started -> %s:%d every %ds",
-                lifecycleHost, lifecyclePort, heartbeatIntervalSeconds);
-    }
-
-    private void heartbeat() {
-        try {
-            SubHeartbeatMessage message = buildHeartbeatMessage();
-
-            // async stub -> returns immediately, never blocks the scheduler thread
-            heartbeatStub.heartbeat(message, new StreamObserver<>() {
-                @Override
-                public void onNext(HeartbeatAck ack) {
-                    if (!ack.getAcknowledged()) {
-                        LOGGER.at(Level.WARNING).log("[Heartbeat] Not acknowledged by lifecycle service");
-                    }
-                }
-
-                @Override
-                public void onError(Throwable t) {
-                    LOGGER.at(Level.WARNING).log("[Heartbeat] Send failed: %s", t.getMessage());
-                }
-
-                @Override
-                public void onCompleted() {
-                    // unary call, nothing to do
-                }
-            });
-        } catch (Exception e) {
-            LOGGER.at(Level.SEVERE).log("[Heartbeat] Error building/sending heartbeat: %s", e.getMessage());
-        }
-    }
-
-    private SubHeartbeatMessage buildHeartbeatMessage() {
-        return SubHeartbeatMessage.newBuilder()
-                .setMatchId(matchId.toString())
-                .setGameType(dev.saltt.common.api.proto.LifeGameType.valueOf(gameType.name()))
-                .setStatus(dev.saltt.common.api.proto.GameStatus.valueOf(gameStatus.name()))
-                .addAllConnectedPlayerIds(toStringList(onlinePlayers))
-                .addAllReservedPlayerIds(toStringList(authedPlayers))
-                .build();
-    }
-
-    private static List<String> toStringList(Set<UUID> uuids) {
-        List<String> out = new ArrayList<>(uuids.size());
-        for (UUID id : uuids) {
-            out.add(id.toString());
-        }
-        return out;
-    }
-
-    public void shutdown() {
-        stopCountdown();
-        stopStartCountdown();
-
-        if (heartbeatTask != null) {
-            heartbeatTask.cancel(false);
-            heartbeatTask = null;
-        }
-        if (channel != null) {
-            channel.shutdown();
-            try {
-                channel.awaitTermination(5, TimeUnit.SECONDS);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-            channel = null;
-        }
-        LOGGER.at(Level.INFO).log("[Heartbeat] Stopped");
+        Thread thread = new Thread(() -> {
+            lifecycle.sendTerminal(messages.build(getStatus()));
+            reserveService.shutdown();
+            phases.shutdown();
+            lifecycle.shutdown();
+            LOGGER.at(Level.INFO).log("[Lifecycle] Teardown complete");
+        }, "sg-teardown");
+        thread.setDaemon(false);
+        thread.start();
     }
 }

@@ -1,4 +1,4 @@
-package dev.saltt.survivalgame.loot;
+package dev.saltt.survivalgame.loot.models;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
