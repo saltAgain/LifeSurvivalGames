@@ -1,9 +1,9 @@
 package dev.saltt.survivalgame.lifecycle.data;
 
-import dev.saltt.survivalgame.lifecycle.server.PlayerRegistry;
-import dev.saltt.common.api.GameStatus;
-import dev.saltt.common.api.LifeGameType;
+import dev.saltt.common.api.proto.GameStatus;
+import dev.saltt.common.api.proto.LifeGameType;
 import dev.saltt.common.api.proto.SubHeartbeatMessage;
+import dev.saltt.survivalgame.lifecycle.server.PlayerRegistry;
 
 import java.util.UUID;
 
@@ -22,8 +22,8 @@ public final class HeartbeatMessage {
     public SubHeartbeatMessage build(GameStatus status) {
         return SubHeartbeatMessage.newBuilder()
                 .setMatchId(matchId.toString())
-                .setGameType(ProtoMapper.toProto(gameType))
-                .setStatus(ProtoMapper.toProto(status))
+                .setGameType(gameType)
+                .setStatus(status)
                 .addAllConnectedPlayerIds(registry.onlineIds())
                 .addAllAuthedPlayerIds(registry.reservedIds())
                 .build();

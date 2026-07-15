@@ -29,7 +29,6 @@ public final class PlayerMatchRecord {
         this.killerUuid = killerUuid;
     }
 
-    /** Survivors are measured to match end, not to "now". */
     public long timeAliveMs(long matchEndedAtMs) {
         long end = eliminatedAtMs >= 0 ? eliminatedAtMs : matchEndedAtMs;
         return Math.max(0L, end - joinedAtMs);

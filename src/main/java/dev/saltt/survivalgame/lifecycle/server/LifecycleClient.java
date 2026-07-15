@@ -21,8 +21,7 @@ import java.util.function.Supplier;
 import java.util.logging.Level;
 
 /**
- * All outbound RPCs to the lifecycle service. Runs on its own thread so a stalled service can
- * never stall the game; nothing here is ever called from the world thread.
+ * All outbound RPCs to the lifecycle service Run on its own thread.
  */
 public final class LifecycleClient {
 
@@ -96,7 +95,6 @@ public final class LifecycleClient {
                 config.getHeartbeatIntervalSeconds());
     }
 
-    /** Push current state immediately rather than waiting out the interval. */
     public void sendNow() {
         if (!terminated) {
             executor.execute(this::sendSafely);
@@ -130,11 +128,6 @@ public final class LifecycleClient {
         }
     }
 
-    /**
-     * Blocking, deadlined, and sent before the channel closes. Fire-and-forget here would be
-     * cancelled in flight by the teardown, leaving the service unable to tell a clean close
-     * from a crash -- so it would hold our players until the liveness timeout expired.
-     */
     public void sendTerminal(SubHeartbeatMessage message) {
         if (terminated || heartbeatBlockingStub == null) {
             return;

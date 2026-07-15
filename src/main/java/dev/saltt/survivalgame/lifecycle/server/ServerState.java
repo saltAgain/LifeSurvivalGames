@@ -1,18 +1,17 @@
 package dev.saltt.survivalgame.lifecycle.server;
 
+import dev.saltt.common.api.proto.GameStatus;
+import dev.saltt.common.api.proto.LifeGameType;
 import dev.saltt.survivalgame.GameConfig;
 import dev.saltt.survivalgame.lifecycle.HytaleWorldHooks;
 import dev.saltt.survivalgame.lifecycle.data.HeartbeatMessage;
 import dev.saltt.survivalgame.lifecycle.data.MatchFlusher;
-import dev.saltt.survivalgame.lifecycle.data.ProtoMapper;
 import dev.saltt.survivalgame.lifecycle.data.grpc.ReserveService;
 import dev.saltt.survivalgame.lifecycle.game.MainThreadWorldHook;
 import dev.saltt.survivalgame.lifecycle.game.SurvivalGame;
 import com.hypixel.hytale.logger.HytaleLogger;
 import com.hypixel.hytale.server.core.HytaleServer;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
-import dev.saltt.common.api.GameStatus;
-import dev.saltt.common.api.LifeGameType;
 import dev.saltt.common.api.proto.RegisterServerMessage;
 
 import java.util.UUID;
@@ -94,7 +93,7 @@ public final class ServerState {
         lifecycle.registerServer(
                 RegisterServerMessage.newBuilder()
                         .setMatchId(matchId.toString())
-                        .setGameType(ProtoMapper.toProto(GAME_TYPE))
+                        .setGameType(GAME_TYPE)
                         .setMapName(config.getMapName())
                         .setRegion(ProtoMapper.toProto(config.getRegion()))
                         .setMaxPlayers(config.getMaxPlayers())

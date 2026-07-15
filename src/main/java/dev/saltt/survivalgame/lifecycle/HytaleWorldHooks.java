@@ -16,7 +16,7 @@ public final class HytaleWorldHooks implements SurvivalGame.GameWorldHooks {
     }
 
     @Override
-    public void freeze(List<UUID> players, boolean frozen) {
+    public void startFreezeTime(List<UUID> players, boolean frozen) {
         // TODO: movement/damage lock for grace period and podium
     }
 

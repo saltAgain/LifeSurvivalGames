@@ -9,7 +9,7 @@ import java.util.concurrent.Executor;
  * Hops every world call onto the tick thread. Keeps SurvivalGame single-threaded (phase thread)
  * while the delegate only ever runs where Hytale expects it.
  *
- * Lists are copied because the caller's collection keeps mutating after we hand it off.
+ * Lists are copied because the caller's collection keeps mutating after hand off.
  */
 public final class MainThreadWorldHook implements SurvivalGame.GameWorldHooks {
 
@@ -28,9 +28,9 @@ public final class MainThreadWorldHook implements SurvivalGame.GameWorldHooks {
     }
 
     @Override
-    public void freeze(List<UUID> players, boolean frozen) {
+    public void startFreezeTime(List<UUID> players, boolean frozen) {
         List<UUID> copy = new ArrayList<>(players);
-        mainThread.execute(() -> delegate.freeze(copy, frozen));
+        mainThread.execute(() -> delegate.startFreezeTime(copy, frozen));
     }
 
     @Override

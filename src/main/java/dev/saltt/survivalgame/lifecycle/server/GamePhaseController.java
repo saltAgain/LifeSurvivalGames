@@ -24,13 +24,8 @@ import java.util.logging.Level;
  * PRE_GAME -> STARTING -> IN_PROGRESS -> ENDING -> ENDED -> SERVER_CLOSING,
  * plus SERVER_LOADING at boot and SERVER_CRASHING from anywhere.
  *
- * Everything runs on the single "sg-phase" thread; public entry points just hand work to it.
- * That is what makes the original double-start impossible: enterStarting could previously fire
- * both from a join filling the lobby and from the countdown task, and the status guard was not
- * atomic. Only `status` and `playerRefs` are touched cross-thread.
- *
- * Nothing here blocks.
- */
+ * Everything runs on the single "sg-phase" thread.
+ **/
 public final class GamePhaseController {
 
     private static final HytaleLogger LOGGER = HytaleLogger.forEnclosingClass();
@@ -110,6 +105,7 @@ public final class GamePhaseController {
             lifecycle.sendNow();
             result.complete(true);
 
+            // expire if player dosnt connect within 10 seconds
             schedulePhaseTask(() -> {
                 if (!registry.isOnline(uuid)) {
                     registry.expireReservation(uuid);

@@ -13,7 +13,7 @@ repositories {
 dependencies {
     //compileOnly(libs.jetbrains.annotations)
     //compileOnly(libs.jspecify)
-    implementation("com.github.saltAgain:LifeCommon:v1.1.41")
+    implementation("com.github.saltAgain:LifeCommon:v1.1.51")
 
 
     compileOnly(fileTree("libs") {

@@ -25,7 +25,7 @@ public final class SurvivalGame {
     public interface GameWorldHooks {
         void teleportToSpawns(List<UUID> players);
 
-        void freeze(List<UUID> players, boolean frozen);
+        void startFreezeTime(List<UUID> players, boolean frozen);
 
         void fillLoot();
 
@@ -69,7 +69,7 @@ public final class SurvivalGame {
 
         world.fillLoot();
         world.teleportToSpawns(roster);
-        world.freeze(roster, true);
+        world.startFreezeTime(roster, true);
         world.broadcast("The games begin! Grace period: " + config.getGraceSeconds() + "s.");
 
         LOGGER.at(Level.INFO).log("[Game] Started with %d players", alive.size());
@@ -86,7 +86,7 @@ public final class SurvivalGame {
     }
 
     public void endGrace() {
-        world.freeze(alivePlayers(), false);
+        world.startFreezeTime(alivePlayers(), false);
         world.broadcast("Grace period over. Fight!");
     }
 
@@ -153,7 +153,7 @@ public final class SurvivalGame {
     }
 
     public void freezeAll(List<UUID> players) {
-        world.freeze(players, true);
+        world.startFreezeTime(players, true);
     }
 
     public void broadcast(String message) {

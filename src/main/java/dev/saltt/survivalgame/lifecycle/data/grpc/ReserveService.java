@@ -1,10 +1,9 @@
 package dev.saltt.survivalgame.lifecycle.data.grpc;
 
+import dev.saltt.common.api.proto.LifeGameType;
 import dev.saltt.survivalgame.GameConfig;
-import dev.saltt.survivalgame.lifecycle.data.ProtoMapper;
 import dev.saltt.survivalgame.lifecycle.server.GamePhaseController;
 import com.hypixel.hytale.logger.HytaleLogger;
-import dev.saltt.common.api.LifeGameType;
 import dev.saltt.common.api.proto.RegisterPlayerReserveServiceGrpc;
 import dev.saltt.common.api.proto.ReservePlayerAck;
 import dev.saltt.common.api.proto.ReservePlayerMessage;
@@ -49,8 +48,7 @@ public final class ReserveService extends RegisterPlayerReserveServiceGrpc.Regis
 
     @Override
     public void reservePlayer(ReservePlayerMessage request, StreamObserver<ReservePlayerAck> responseObserver) {
-        if (!matchId.toString().equals(request.getMatchId())
-                || gameType != ProtoMapper.fromProto(request.getGameType())) {
+        if (!matchId.toString().equals(request.getMatchId())) {
             respond(responseObserver, false);
             return;
         }

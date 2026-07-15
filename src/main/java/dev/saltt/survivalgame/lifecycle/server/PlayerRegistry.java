@@ -8,7 +8,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Reserved (matchmaker says they're coming) and online (actually connected) players.
+ * Players that have been assigned to the game server
  * Mutated only from the phase thread; read from the heartbeat thread.
  */
 public final class PlayerRegistry {
